@@ -34,9 +34,10 @@ import onnxruntime as ort
 # ── paths ─────────────────────────────────────────────────────────────────────
 
 REPO_ROOT         = Path(__file__).resolve().parent.parent
-LWTNN_BIN         = REPO_ROOT / "build" / "bin" / "lwtnn-test-rnn"
-LWTNN_BENCH_BIN   = REPO_ROOT / "build" / "bin" / "lwtnn-bench-inference"
-ORT_BENCH_BIN     = REPO_ROOT / "build" / "bin" / "ort-bench-inference"
+LWTNN_BIN          = REPO_ROOT / "build" / "bin" / "lwtnn-test-rnn"
+LWTNN_BENCH_BIN    = REPO_ROOT / "build" / "bin" / "lwtnn-bench-inference"
+LWTNN_F32_BENCH_BIN = REPO_ROOT / "build" / "bin" / "lwtnn-bench-inference-f32"
+ORT_BENCH_BIN      = REPO_ROOT / "build" / "bin" / "ort-bench-inference"
 CONVERTER         = REPO_ROOT / "converters" / "keras2json.py"
 
 TEST_DATA_URL = "https://github.com/lwtnn/lwtnn-test-data/raw/v2.1/GRU.tgz"
@@ -362,11 +363,12 @@ def parse_bench_output(text: str) -> dict:
     return result
 
 
-def run_lwtnn_bench(lwtnn_json: str, n_inferences: int) -> dict:
-    """Run lwtnn-bench-inference and return the parsed key=value dict."""
-    _require_bin(LWTNN_BENCH_BIN, _BUILD_HINT)
+def run_lwtnn_bench(lwtnn_json: str, n_inferences: int, f32: bool = False) -> dict:
+    """Run lwtnn-bench-inference (f64 or f32) and return the parsed key=value dict."""
+    bin_path = LWTNN_F32_BENCH_BIN if f32 else LWTNN_BENCH_BIN
+    _require_bin(bin_path, _BUILD_HINT)
     result = subprocess.run(
-        [str(LWTNN_BENCH_BIN), lwtnn_json, "--n-inferences", str(n_inferences)],
+        [str(bin_path), lwtnn_json, "--n-inferences", str(n_inferences)],
         capture_output=True, text=True, check=True,
     )
     return parse_bench_output(result.stdout)
@@ -529,8 +531,11 @@ def main():
         # ── 9. C++ benchmarks ─────────────────────────────────────────────────
         print(f"\n[9] C++ inference benchmarks  ({n_inferences} calls each) …")
 
-        print("    Running lwtnn-bench-inference …", flush=True)
-        lwtnn_bench = run_lwtnn_bench(lwtnn_json, n_inferences)
+        print("    Running lwtnn-bench-inference (f64) …", flush=True)
+        lwtnn_bench = run_lwtnn_bench(lwtnn_json, n_inferences, f32=False)
+
+        print("    Running lwtnn-bench-inference (f32) …", flush=True)
+        lwtnn_f32_bench = run_lwtnn_bench(lwtnn_json, n_inferences, f32=True)
 
         print("    Running ort-bench-inference (unrolled) …", flush=True)
         ort_bench = run_ort_bench(onnx_path, n_inferences, n_inputs, N_PATTERNS)
@@ -540,11 +545,12 @@ def main():
 
         # ── 10. benchmark comparison table ───────────────────────────────────
         print("\n[10] Performance comparison")
-        _print_bench_table(lwtnn_bench, ort_bench, opt_bench)
+        _print_bench_table(lwtnn_bench, lwtnn_f32_bench, ort_bench, opt_bench)
 
 
-def _print_bench_table(lwtnn: dict, ort_unrolled: dict, ort_native: dict) -> None:
-    """Render a three-way benchmark comparison table."""
+def _print_bench_table(lwtnn: dict, lwtnn_f32: dict,
+                       ort_unrolled: dict, ort_native: dict) -> None:
+    """Render a four-way benchmark comparison table."""
     metrics = [
         ("inference_mean_us",   "Mean latency (µs)"),
         ("inference_min_us",    "Min  latency (µs)"),
@@ -554,35 +560,38 @@ def _print_bench_table(lwtnn: dict, ort_unrolled: dict, ort_native: dict) -> Non
         ("peak_rss_kb",         "Peak RSS (KB)"),
     ]
 
-    col_w   = 14
-    label_w = 24
-    print(f"  {'Metric':<{label_w}}  {'lwtnn':>{col_w}}  "
-          f"{'ORT unrolled':>{col_w}}  {'ORT native GRU':>{col_w}}  "
-          f"{'unrolled/lwtnn':>{col_w}}  {'native/lwtnn':>{col_w}}")
-    print("  " + "-" * (label_w + 4 * col_w + 5 * 2 + 20))
+    col_w   = 13
+    label_w = 22
+    print(f"  {'Metric':<{label_w}}  {'lwtnn (f64)':>{col_w}}  {'lwtnn (f32)':>{col_w}}  "
+          f"{'ORT unrolled':>{col_w}}  {'ORT native':>{col_w}}  "
+          f"{'f32/f64':>{8}}  {'native/f64':>{10}}")
+    print("  " + "-" * (label_w + 4*col_w + 4*2 + 22))
 
     for key, label in metrics:
-        lv  = float(lwtnn.get(key, "nan"))
-        ov  = float(ort_unrolled.get(key, "nan"))
-        nv  = float(ort_native.get(key, "nan"))
-        r1  = ov / lv if lv else float("nan")
-        r2  = nv / lv if lv else float("nan")
-        print(f"  {label:<{label_w}}  {lv:>{col_w}.2f}  "
+        lv   = float(lwtnn.get(key,       "nan"))
+        lv32 = float(lwtnn_f32.get(key,   "nan"))
+        ov   = float(ort_unrolled.get(key, "nan"))
+        nv   = float(ort_native.get(key,   "nan"))
+        r32  = lv32 / lv if lv else float("nan")
+        rnat = nv   / lv if lv else float("nan")
+        print(f"  {label:<{label_w}}  {lv:>{col_w}.2f}  {lv32:>{col_w}.2f}  "
               f"{ov:>{col_w}.2f}  {nv:>{col_w}.2f}  "
-              f"{r1:>{col_w}.2f}x  {r2:>{col_w}.2f}x")
+              f"{r32:>{8}.2f}x  {rnat:>{10}.2f}x")
 
     print()
-    mean_l  = float(lwtnn.get("inference_mean_us", "nan"))
-    mean_ou = float(ort_unrolled.get("inference_mean_us", "nan"))
-    mean_on = float(ort_native.get("inference_mean_us", "nan"))
-    rss_l   = float(lwtnn.get("peak_rss_kb", "nan"))
-    rss_on  = float(ort_native.get("peak_rss_kb", "nan"))
+    mean_l   = float(lwtnn.get("inference_mean_us",     "nan"))
+    mean_l32 = float(lwtnn_f32.get("inference_mean_us", "nan"))
+    mean_ou  = float(ort_unrolled.get("inference_mean_us", "nan"))
+    mean_on  = float(ort_native.get("inference_mean_us",   "nan"))
+    rss_l    = float(lwtnn.get("peak_rss_kb", "nan"))
+    rss_on   = float(ort_native.get("peak_rss_kb", "nan"))
 
+    print(f"  → lwtnn f32 is {mean_l/mean_l32:.1f}x faster than lwtnn f64.")
     print(f"  → ORT native GRU is {mean_ou/mean_on:.1f}x faster than ORT unrolled.")
-    if mean_on < mean_l:
-        print(f"  → ORT native GRU is {mean_l/mean_on:.1f}x faster than lwtnn (mean latency).")
+    if mean_on < mean_l32:
+        print(f"  → ORT native GRU is {mean_l32/mean_on:.1f}x faster than lwtnn f32.")
     else:
-        print(f"  → lwtnn is still {mean_on/mean_l:.1f}x faster than ORT native GRU (mean latency).")
+        print(f"  → lwtnn f32 is {mean_on/mean_l32:.1f}x faster than ORT native GRU.")
     print(f"  → lwtnn uses {rss_on/rss_l:.1f}x less peak RSS than ORT native GRU.")
 
 

@@ -177,27 +177,29 @@ def run_ort_bench(onnx_path, bench_bin, n_inferences=1000, n_inputs=60):
 
 # ── 8. Comparison table ───────────────────────────────────────────────────────
 
-def _print_bench_table(lwtnn_kv, ort_kv):
+def _print_bench_table(lwtnn_kv, lwtnn_f32_kv, ort_kv):
     metrics = [
-        ("mean",   "inference_mean_us"),
-        ("min",    "inference_min_us"),
-        ("median", "inference_median_us"),
-        ("p99",    "inference_p99_us"),
-        ("max",    "inference_max_us"),
+        ("mean",          "inference_mean_us"),
+        ("min",           "inference_min_us"),
+        ("median",        "inference_median_us"),
+        ("p99",           "inference_p99_us"),
+        ("max",           "inference_max_us"),
         ("peak RSS (kB)", "peak_rss_kb"),
     ]
-    col = 16
-    print(f"\n{'Metric':<20}  {'lwtnn':>{col}}  {'ort (ONNX)':>{col}}")
-    print("-" * (20 + 2*(col+2)))
+    col = 14
+    print(f"\n{'Metric':<20}  {'lwtnn (f64)':>{col}}  {'lwtnn (f32)':>{col}}  {'ORT (f32)':>{col}}")
+    print("-" * (20 + 3*(col+2)))
     for label, key in metrics:
-        lv = lwtnn_kv.get(key, "N/A")
-        ov = ort_kv.get(key,   "N/A")
+        lv   = lwtnn_kv.get(key,     "N/A")
+        lv32 = lwtnn_f32_kv.get(key, "N/A")
+        ov   = ort_kv.get(key,       "N/A")
         try:
-            ratio = float(ov) / float(lv)
-            ratio_str = f"  ({ratio:.2f}×)"
+            r32  = float(lv32) / float(lv)
+            rort = float(ov)   / float(lv)
+            ratio_str = f"  ({r32:.2f}×)  ({rort:.2f}×)"
         except (ValueError, ZeroDivisionError):
             ratio_str = ""
-        print(f"{label:<20}  {lv:>{col}}  {ov:>{col}}{ratio_str}")
+        print(f"{label:<20}  {lv:>{col}}  {lv32:>{col}}  {ov:>{col}}{ratio_str}")
 
 
 # ── main ──────────────────────────────────────────────────────────────────────
@@ -224,11 +226,13 @@ def main():
         if build_dir is None:
             sys.exit("Cannot find build dir; pass --build-dir")
 
-    lwtnn_bench = os.path.join(build_dir, "bin", "lwtnn-bench-mlp")
-    ort_bench   = os.path.join(build_dir, "bin", "ort-bench-inference")
+    lwtnn_bench     = os.path.join(build_dir, "bin", "lwtnn-bench-mlp")
+    lwtnn_f32_bench = os.path.join(build_dir, "bin", "lwtnn-bench-mlp-f32")
+    ort_bench       = os.path.join(build_dir, "bin", "ort-bench-inference")
 
-    for p, name in [(lwtnn_bench, "lwtnn-bench-mlp"),
-                    (ort_bench,   "ort-bench-inference")]:
+    for p, name in [(lwtnn_bench,     "lwtnn-bench-mlp"),
+                    (lwtnn_f32_bench, "lwtnn-bench-mlp-f32"),
+                    (ort_bench,       "ort-bench-inference")]:
         if not os.path.isfile(p):
             sys.exit(f"Binary not found: {p}\nRun cmake --build {build_dir}")
 
@@ -244,14 +248,22 @@ def main():
     pt_out = run_pytorch(model)
     print(f"\n[1] PyTorch output: {pt_out}")
 
-    # ── lwtnn C++ ─────────────────────────────────────────────────────────────
-    print(f"\n[2] Running lwtnn C++ ({args.n_inferences} inferences)...")
+    # ── lwtnn C++ (float64) ───────────────────────────────────────────────────
+    print(f"\n[2] Running lwtnn C++ float64 ({args.n_inferences} inferences)...")
     lwtnn_out, lwtnn_kv = run_lwtnn(model, lwtnn_bench, args.n_inferences)
     lwtnn_vec = np.array([lwtnn_out[f"out_{i}"] for i in range(LAYER_SIZES[-1])])
-    print(f"    lwtnn output: {lwtnn_vec}")
+    print(f"    lwtnn-f64 output: {lwtnn_vec}")
     diff_pt = np.max(np.abs(lwtnn_vec - pt_out))
-    print(f"    max |lwtnn - pytorch| = {diff_pt:.2e}")
-    assert diff_pt < 1e-5, f"lwtnn vs pytorch mismatch: {diff_pt}"
+    print(f"    max |lwtnn-f64 - pytorch| = {diff_pt:.2e}")
+    assert diff_pt < 1e-5, f"lwtnn-f64 vs pytorch mismatch: {diff_pt}"
+
+    # ── lwtnn C++ (float32) ───────────────────────────────────────────────────
+    print(f"\n[3] Running lwtnn C++ float32 ({args.n_inferences} inferences)...")
+    lwtnn_f32_out, lwtnn_f32_kv = run_lwtnn(model, lwtnn_f32_bench, args.n_inferences)
+    lwtnn_f32_vec = np.array([lwtnn_f32_out[f"out_{i}"] for i in range(LAYER_SIZES[-1])])
+    print(f"    lwtnn-f32 output: {lwtnn_f32_vec}")
+    diff_f32 = np.max(np.abs(lwtnn_f32_vec - pt_out))
+    print(f"    max |lwtnn-f32 - pytorch| = {diff_f32:.2e}")
 
     # ── ONNX export ───────────────────────────────────────────────────────────
     with tempfile.NamedTemporaryFile(suffix=".onnx", delete=False) as f:
@@ -260,7 +272,7 @@ def main():
         build_onnx_model(model, onnx_path)
         onnx_model = onnx.load(onnx_path)
         n_nodes = len(onnx_model.graph.node)
-        print(f"\n[3] ONNX model: {n_nodes} nodes")
+        print(f"\n[4] ONNX model: {n_nodes} nodes")
 
         # ORT Python check
         ort_py_out = run_ort_python(model, onnx_path)
@@ -270,7 +282,7 @@ def main():
         assert diff_ort < 1e-5, f"ORT vs pytorch mismatch: {diff_ort}"
 
         # ── ORT C++ benchmark ─────────────────────────────────────────────────
-        print(f"\n[4] Running ORT C++ ({args.n_inferences} inferences)...")
+        print(f"\n[5] Running ORT C++ ({args.n_inferences} inferences)...")
         ort_out, ort_kv = run_ort_bench(
             onnx_path, ort_bench, args.n_inferences, n_inputs=LAYER_SIZES[0])
         ort_vec = np.array([ort_out[f"class_{i}"] for i in range(LAYER_SIZES[-1])])
@@ -285,7 +297,7 @@ def main():
     # ── timing table ──────────────────────────────────────────────────────────
     print(f"\n{'='*60}")
     print(f"Timing comparison ({args.n_inferences} inferences, µs unless noted)")
-    _print_bench_table(lwtnn_kv, ort_kv)
+    _print_bench_table(lwtnn_kv, lwtnn_f32_kv, ort_kv)
     print()
 
 
