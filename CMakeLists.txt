@@ -232,6 +232,29 @@ lwtnn_add_executable( lwtnn-test-graph )
 lwtnn_add_executable( lwtnn-test-lightweight-graph )
 lwtnn_add_executable( lwtnn-test-rnn )
 lwtnn_add_executable( lwtnn-test-fastgraph )
+lwtnn_add_executable( lwtnn-bench-inference )
+lwtnn_add_executable( lwtnn-bench-mlp )
+
+# ONNX Runtime inference benchmark (requires onnxruntime-cpp conda package).
+find_library( ONNXRUNTIME_LIB onnxruntime
+   PATHS ENV CONDA_PREFIX
+   PATH_SUFFIXES lib
+   NO_DEFAULT_PATH )
+find_path( ONNXRUNTIME_INCLUDE_DIR onnxruntime/core/session/onnxruntime_cxx_api.h
+   PATHS ENV CONDA_PREFIX
+   PATH_SUFFIXES include
+   NO_DEFAULT_PATH )
+if( ONNXRUNTIME_LIB AND ONNXRUNTIME_INCLUDE_DIR )
+   add_executable( ort-bench-inference src/ort-bench-inference.cxx )
+   target_include_directories( ort-bench-inference SYSTEM PRIVATE
+      ${ONNXRUNTIME_INCLUDE_DIR} )
+   target_link_libraries( ort-bench-inference ${ONNXRUNTIME_LIB} )
+   set_target_properties( ort-bench-inference PROPERTIES CXX_STANDARD 17 )
+   install( TARGETS ort-bench-inference RUNTIME DESTINATION bin )
+   message( STATUS "ONNX Runtime benchmark enabled (${ONNXRUNTIME_LIB})" )
+else()
+   message( STATUS "ONNX Runtime not found — ort-bench-inference will not be built" )
+endif()
 
 # Install the converter scripts.
 install( FILES
