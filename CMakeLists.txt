@@ -233,7 +233,9 @@ lwtnn_add_executable( lwtnn-test-lightweight-graph )
 lwtnn_add_executable( lwtnn-test-rnn )
 lwtnn_add_executable( lwtnn-test-fastgraph )
 lwtnn_add_executable( lwtnn-bench-inference )
+lwtnn_add_executable( lwtnn-bench-inference-f32 )
 lwtnn_add_executable( lwtnn-bench-mlp )
+lwtnn_add_executable( lwtnn-bench-mlp-f32 )
 
 # ONNX Runtime inference benchmark (requires onnxruntime-cpp conda package).
 find_library( ONNXRUNTIME_LIB onnxruntime

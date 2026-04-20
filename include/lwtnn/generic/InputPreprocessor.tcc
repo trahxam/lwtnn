@@ -16,13 +16,13 @@ namespace generic {
     m_scales(inputs.size())
   {
     static_assert( std::is_same<T, double>::value ||
-                   std::is_assignable<T, double>::value,
+                   std::is_assignable<T&, double>::value,
                    "double cannot be implicitly assigned to T" );
 
     std::size_t in_num = 0;
     for (const auto& input: inputs) {
-      m_offsets(in_num) = input.offset;
-      m_scales(in_num) = input.scale;
+      m_offsets(in_num) = static_cast<T>(input.offset);
+      m_scales(in_num) = static_cast<T>(input.scale);
       m_names.push_back(input.name);
       in_num++;
     }
@@ -51,13 +51,13 @@ namespace generic {
     m_scales(inputs.size())
   {
     static_assert( std::is_same<T, double>::value ||
-                   std::is_assignable<T, double>::value,
+                   std::is_assignable<T&, double>::value,
                    "double cannot be implicitly assigned to T" );
 
     std::size_t in_num = 0;
     for (const auto& input: inputs) {
-      m_offsets(in_num) = input.offset;
-      m_scales(in_num) = input.scale;
+      m_offsets(in_num) = static_cast<T>(input.offset);
+      m_scales(in_num) = static_cast<T>(input.scale);
       m_names.push_back(input.name);
       in_num++;
     }
@@ -85,11 +85,11 @@ namespace generic {
       if (invec.size() != n_cols) {
         throw NNEvaluationException("Input vector size mismatch");
       }
-      inmat.row(in_num) = Map<const VectorXd>(invec.data(), invec.size());
+      inmat.row(in_num) = Map<const VectorXd>(invec.data(), invec.size()).template cast<T>();
       in_num++;
     }
     if (n_cols == 0) {
-        return MatrixXd(m_names.size(), 0);
+        return MatrixX<T>(m_names.size(), 0);
     }
     return m_scales.asDiagonal() * (inmat.colwise() + m_offsets);
   }
